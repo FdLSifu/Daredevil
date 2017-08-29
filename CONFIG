@@ -63,6 +63,12 @@ order=1
 # The return type of the correlation.
 return_type=double
 
+# Output all computed correlation into a binary file located in working directory
+# Filename is set to "correlation.bin" and is built as a 3-d matrix
+# Dimension are the following [#bytenum, #kguess (256), #n_samples] 
+# Type depend on return_type
+corrout=f
+
 # The size of the window when computing 2-order CPA
 # Warning, window starts indexing at the position of the first index.
 # e.g. i=23, window=4 => 23, 24, 25, 26

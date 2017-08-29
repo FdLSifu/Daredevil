@@ -436,6 +436,10 @@ struct Config {
    */
   int8_t bitnum;
 
+  /* Wether we want to output correlation file
+   */
+  bool corrout;
+
 };
 
 /* Structure used to store ALL the general and common information

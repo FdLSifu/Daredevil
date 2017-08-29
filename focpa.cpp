@@ -24,6 +24,7 @@
 #include <math.h>
 #include <omp.h>
 #include <sstream>
+#include <fstream>
 #include "pearson.h"
 #include "cpa.h"
 #include "utils.h"
@@ -32,6 +33,7 @@
 #include "socpa.h"
 
 extern pthread_mutex_t lock;
+int current_key_byte = 0;
 
 /* Implements first order CPA in a faster and multithreaded way on big files,
  * using the vertical partitioning approach.
@@ -123,6 +125,9 @@ int first_order(Config & conf)
     return -1;
   }
 
+  if (conf.corrout)   
+    std::remove("correlation.bin");
+
   FinalConfig<TypeTrace, TypeReturn, TypeGuess> fin_conf = FinalConfig<TypeTrace, TypeReturn, TypeGuess>(&mat_args, &conf, (void*)queues);
   pthread_mutex_init(&lock, NULL);
 
@@ -146,6 +151,8 @@ int first_order(Config & conf)
     if (conf.bytenum != -1 && conf.bytenum != bn){
       continue;
     }
+
+    current_key_byte = bn;
 
     if (conf.sep == "") printf("[ATTACK] Key byte number %i\n\n", bn);
     else if (conf.key_size > 1) printf("%i%s", bn, conf.sep.c_str());
@@ -382,7 +389,7 @@ void * correlation_first_order(void * args_in)
 {
   General<TypeTrace, TypeReturn, TypeGuess> * G = (General<TypeTrace, TypeReturn, TypeGuess> *) args_in;
   FirstOrderQueues<TypeReturn> * queues = (FirstOrderQueues<TypeReturn> *)(G->fin_conf->queues);
-  int i, k, j,
+  int i, k, j, seekoffset,
       n_keys = G->fin_conf->conf->total_n_keys,
       n_traces = G->fin_conf->conf->n_traces,
       first_sample = G->fin_conf->conf->index_sample,
@@ -392,8 +399,14 @@ void * correlation_first_order(void * args_in)
     sum_sq_trace,
     tmp;
   CorrFirstOrder<TypeReturn> * q = (CorrFirstOrder<TypeReturn> *) malloc(n_keys * sizeof(CorrFirstOrder<TypeReturn>));
+  std::ofstream ofs;
   if (q == NULL){
     fprintf (stderr, "[ERROR] Allocating memory for q in correlation\n");
+  }
+
+  if (G->fin_conf->conf->corrout) {
+	  // Open correlation output file
+	  ofs.open("correlation.bin", std::ios::binary | std::ios::out | std::ios::app);
   }
 
   for (i = G->start; i < G->start + G->length; i++) {
@@ -418,6 +431,15 @@ void * correlation_first_order(void * args_in)
       q[k].corr  = corr;
       q[k].time  = i + first_sample + offset;
       q[k].key   = k;
+
+      if (G->fin_conf->conf->corrout) {
+        seekoffset =  current_key_byte*n_keys*G->fin_conf->conf->n_samples;
+        seekoffset += k*G->fin_conf->conf->n_samples;
+        seekoffset += i;
+        seekoffset *= sizeof(TypeReturn);
+        ofs.seekp(seekoffset,std::ios_base::beg);
+        ofs.write(reinterpret_cast<const char*>(&corr),sizeof(corr));
+      }
     }
 
     pthread_mutex_lock(&lock);
@@ -430,6 +452,12 @@ void * correlation_first_order(void * args_in)
     }
     pthread_mutex_unlock(&lock);
   }
+
+  if (G->fin_conf->conf->corrout) {
+    ofs.flush();
+    ofs.close();
+  }
+
   free (q);
   return NULL;
 }
