@@ -34,6 +34,7 @@
 
 extern pthread_mutex_t lock;
 int current_key_byte = 0;
+void ***correlation;
 
 /* Implements first order CPA in a faster and multithreaded way on big files,
  * using the vertical partitioning approach.
@@ -125,8 +126,16 @@ int first_order(Config & conf)
     return -1;
   }
 
-  if (conf.corrout)   
-    std::remove("correlation.bin");
+  if (conf.corrout)
+  {
+    correlation = (void ***) malloc(16*sizeof(TypeReturn **));
+    for(int i = 0; i < 16; i ++)
+    {
+      correlation[i] = (void**)malloc(256*sizeof(TypeReturn*));
+      for (int b = 0 ; b < 256 ; b++)
+        correlation[i][b] = (void*)malloc(n_samples*sizeof(TypeReturn));
+    }
+  }
 
   FinalConfig<TypeTrace, TypeReturn, TypeGuess> fin_conf = FinalConfig<TypeTrace, TypeReturn, TypeGuess>(&mat_args, &conf, (void*)queues);
   pthread_mutex_init(&lock, NULL);
@@ -361,7 +370,49 @@ int first_order(Config & conf)
       for (size_t i = 0; i < top_keys.size(); i++) {
           cout << i+1 << ": " << top_keys[i].first << ": " << top_keys[i].second << endl;
       }
-}
+  }
+
+  if (conf.corrout)
+  {
+      // file management
+      // check if correlation.bin exists if yes rename it
+      if (FILE * file = fopen("correlation.bin","r")) {
+	  fclose(file);
+	  
+	  /*time_t now = time(0);
+	  tm* currentDate = localtime(&now);
+	  char filename[256] = {0};
+	  char timename[256] = {0};
+
+	  strftime(timename,256,"%Y%m%d%H%M%S",currentDate);
+	  strcpy(filename,"correlation_");
+	  strcat(filename, timename);
+	  strcat(filename, ".bin");
+          
+	  std::rename("correlation.bin",filename);
+
+	  printf("[INFO] Exisiting correlation.bin file renamed to %s.\n",filename);
+	  */
+	  std::remove("correlation.bin");
+      }
+      std::ofstream ofs;
+      ofs.open("correlation.bin", std::ios::binary | std::ios::out | std::ios::app);
+      for (int i = 0; i < 16; i++)
+          for (int j = 0 ; j < 256; j++)
+              for (int k = 0; k < n_samples; k++)
+                  ofs.write(reinterpret_cast<char*>(&((TypeReturn***)correlation)[i][j][k]),sizeof(TypeReturn));
+      ofs.flush();
+      ofs.close();
+
+      // memory management
+      for (int i = 0; i < 16; i++)
+      {
+          for (int j = 0; j < 256; j ++)
+              free(correlation[i][j]);
+          free(correlation[i]);
+      }
+      free(correlation);
+  }
 
   for (size_t i = 0; i < sum_bit_corels.size(); i++) {
       delete sum_bit_corels[i];
@@ -389,7 +440,7 @@ void * correlation_first_order(void * args_in)
 {
   General<TypeTrace, TypeReturn, TypeGuess> * G = (General<TypeTrace, TypeReturn, TypeGuess> *) args_in;
   FirstOrderQueues<TypeReturn> * queues = (FirstOrderQueues<TypeReturn> *)(G->fin_conf->queues);
-  int i, k, j, seekoffset,
+  int i, k, j,
       n_keys = G->fin_conf->conf->total_n_keys,
       n_traces = G->fin_conf->conf->n_traces,
       first_sample = G->fin_conf->conf->index_sample,
@@ -399,14 +450,8 @@ void * correlation_first_order(void * args_in)
     sum_sq_trace,
     tmp;
   CorrFirstOrder<TypeReturn> * q = (CorrFirstOrder<TypeReturn> *) malloc(n_keys * sizeof(CorrFirstOrder<TypeReturn>));
-  std::ofstream ofs;
   if (q == NULL){
     fprintf (stderr, "[ERROR] Allocating memory for q in correlation\n");
-  }
-
-  if (G->fin_conf->conf->corrout) {
-	  // Open correlation output file
-	  ofs.open("correlation.bin", std::ios::binary | std::ios::out | std::ios::app);
   }
 
   for (i = G->start; i < G->start + G->length; i++) {
@@ -432,14 +477,8 @@ void * correlation_first_order(void * args_in)
       q[k].time  = i + first_sample + offset;
       q[k].key   = k;
 
-      if (G->fin_conf->conf->corrout) {
-        seekoffset =  current_key_byte*n_keys*G->fin_conf->conf->n_samples;
-        seekoffset += k*G->fin_conf->conf->n_samples;
-        seekoffset += i;
-        seekoffset *= sizeof(TypeReturn);
-        ofs.seekp(seekoffset,std::ios_base::beg);
-        ofs.write(reinterpret_cast<const char*>(&corr),sizeof(corr));
-      }
+      if (G->fin_conf->conf->corrout)
+	((TypeReturn***)correlation)[current_key_byte][k][i] = corr;
     }
 
     pthread_mutex_lock(&lock);
@@ -452,12 +491,6 @@ void * correlation_first_order(void * args_in)
     }
     pthread_mutex_unlock(&lock);
   }
-
-  if (G->fin_conf->conf->corrout) {
-    ofs.flush();
-    ofs.close();
-  }
-
   free (q);
   return NULL;
 }
